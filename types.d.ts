@@ -21,6 +21,7 @@ type WriteFrameOpts = {
   delay?: number;
   repeat?: number;
   dispose?: number;
+  comment?: string | Uint8Array | Array<string | Uint8Array>;
 };
 
 type Encoder = {
@@ -34,10 +35,50 @@ type Encoder = {
   bytes: () => Uint8Array;
   bytesView: () => Uint8Array;
   writeHeader: () => void;
+  writeLoopExt: (repeat?: number) => void;
+  writeComment: (comment: string | Uint8Array) => void;
+  writeApplicationExt: (
+    appIdentifier: string | Uint8Array,
+    authCode: string | Uint8Array,
+    data: string | Uint8Array,
+  ) => void;
+  writeExtension: (label: number, data: string | Uint8Array) => void;
   reset: () => void;
   buffer: ArrayBuffer;
   stream: any;
 };
+
+type ParsedApplicationExtension = {
+  identifier: string;
+  authCode: string;
+  data: Uint8Array;
+};
+
+type ParsedExtension = {
+  label: number;
+  data: Uint8Array;
+};
+
+type ParsedBlock = {
+  type: string;
+  [key: string]: any;
+};
+
+type ParsedGIFMetadata = {
+  header: string;
+  width: number;
+  height: number;
+  repeat: number | null;
+  comments: string[];
+  applications: ParsedApplicationExtension[];
+  extensions: ParsedExtension[];
+  frames: number;
+  blocks: ParsedBlock[];
+};
+
+export declare function parseExtensions(
+  bytes: Uint8Array | ArrayBuffer,
+): ParsedGIFMetadata;
 
 export declare function quantize(
   rgba: Uint8Array | Uint8ClampedArray,

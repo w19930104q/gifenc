@@ -119,6 +119,25 @@ Writes a single frame into the GIF stream, with `index` (indexed Uint8Array bitm
 - `delay` (number, default 0) — the frame delay in milliseconds
 - `repeat` (number, default 0) — repeat count, set to `-1` for 'once', `0` for 'forever', and any other positive integer for the number of repetitions
 - `dispose` (number, default -1) — advanced GIF dispose flag override, -1 is 'use default'
+- `comment` (string, Uint8Array, or array of these, default none) — one or more comment extensions written just before this frame's graphic control extension
+
+#### `gif.writeComment(comment)`
+
+Writes a comment extension at the current stream position. Accepts a string (UTF-8 encoded) or a `Uint8Array` of raw bytes.
+
+#### `gif.writeLoopExt(repeat = 0)`
+
+Writes a NETSCAPE2.0 looping extension at the current stream position (`0` loops forever, `>0` sets a repetition count). Note the `repeat` frame option already writes this on the first frame unless you pass `repeat: -1`; use this method when you need explicit control over the block's position.
+
+#### `gif.writeApplicationExt(appIdentifier, authCode, data)`
+
+Writes an application extension with an 8-byte application identifier, 3-byte authentication code (strings are truncated/space-padded to fit), and arbitrary `data` (string or `Uint8Array`, split into sub-blocks automatically).
+
+#### `gif.writeExtension(label, data)`
+
+Writes a generic extension block with the given `label` byte and `data` (string or `Uint8Array`) as data sub-blocks.
+
+Metadata blocks are written to the stream in the exact order you call them, interleaved with frames. In `auto` mode, calling any of these before the first frame writes the GIF header first; for maximum decoder compatibility, write metadata after the first frame (or use the per-frame `comment`/`repeat` options), since some decoders only look for extensions after the Logical Screen Descriptor.
 
 #### `gif.finish()`
 
@@ -154,6 +173,18 @@ gif.stream.writeByte(0xff);
 // write a chunk of bytes to the stream
 gif.stream.writeBytes(myTypedArray, offset, byteLength);
 ```
+
+### `meta = parseExtensions(bytes)`
+
+Decodes the metadata of an encoded GIF (`Uint8Array` or `ArrayBuffer`), walking its block structure without decoding pixels. Returns:
+
+- `header`, `width`, `height` — header string and logical screen size
+- `repeat` — loop count from the NETSCAPE2.0 extension (`null` if absent, `0` = forever)
+- `comments` — all comment extensions, in stream order, decoded as UTF-8 strings
+- `applications` — application extensions as `{ identifier, authCode, data }`
+- `extensions` — any other extension blocks as `{ label, data }`
+- `frames` — number of image frames
+- `blocks` — ordered log of every block in the stream (e.g. `{ type: "comment" }`, `{ type: "image" }`, `{ type: "graphic-control", delay, ... }`)
 
 ### `index = nearestColorIndex(palette, pixel)`
 

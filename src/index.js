@@ -2,6 +2,7 @@ import constants from "./constants.js";
 import lzwEncode from "./lzwEncode.js";
 import createStream from "./stream.js";
 import quantize from "./pnnquant2.js";
+import parseExtensions from "./parse.js";
 
 import {
   prequantize,
@@ -25,11 +26,24 @@ function GIFEncoder(opt = {}) {
   const codetab = new Int32Array(HSIZE);
 
   let hasInit = false;
+  let frameCount = 0;
+
+  // In 'auto' mode, ensure the GIF header has been written. This runs
+  // lazily before the first frame or before any out-of-band metadata
+  // block (comment/extension), so blocks land in the stream exactly
+  // in the order the API calls are made.
+  function ensureHeader() {
+    if (auto && !hasInit) {
+      writeHeader();
+      hasInit = true;
+    }
+  }
 
   return {
     reset() {
       stream.reset();
       hasInit = false;
+      frameCount = 0;
     },
     finish() {
       stream.writeByte(constants.trailer);
@@ -47,6 +61,30 @@ function GIFEncoder(opt = {}) {
       return stream;
     },
     writeHeader,
+    // Writes a NETSCAPE2.0 looping extension at the current stream
+    // position. repeat: -1=once (no extension needed), 0=forever, >0=count
+    writeLoopExt(repeat = 0) {
+      ensureHeader();
+      encodeNetscapeExt(stream, repeat);
+    },
+    // Writes a comment extension (0x21 0xFE) at the current stream
+    // position. Accepts a string (UTF-8 encoded) or a Uint8Array.
+    writeComment(comment) {
+      ensureHeader();
+      encodeCommentExt(stream, comment);
+    },
+    // Writes an application extension (0x21 0xFF) with an 8-byte
+    // application identifier, 3-byte auth code and arbitrary data.
+    writeApplicationExt(appIdentifier, authCode, data) {
+      ensureHeader();
+      encodeApplicationExt(stream, appIdentifier, authCode, data);
+    },
+    // Writes a generic extension block (0x21, label, data sub-blocks)
+    // for extension labels that carry data sub-blocks.
+    writeExtension(label, data) {
+      ensureHeader();
+      encodeExtension(stream, label, data);
+    },
     writeFrame(index, width, height, opts = {}) {
       const {
         transparent = false,
@@ -56,25 +94,23 @@ function GIFEncoder(opt = {}) {
         repeat = 0, // -1=once, 0=forever, >0=count
         colorDepth = 8,
         dispose = -1,
+        comment = null,
       } = opts;
 
       let first = false;
       if (auto) {
         // In 'auto' mode, the first time we write a frame
         // we will write LSD/GCT/EXT
-        if (!hasInit) {
-          // have not yet init, we can consider this our first frame
-          first = true;
-          // in 'auto' mode, we also encode a header on first frame
-          // this is different than manual mode where you must encode
-          // header yoursef (or perhaps not write header altogether)
-          writeHeader();
-          hasInit = true;
-        }
+        first = frameCount === 0;
+        // in 'auto' mode, we also encode a header on first frame
+        // this is different than manual mode where you must encode
+        // header yoursef (or perhaps not write header altogether)
+        ensureHeader();
       } else {
         // in manual mode, the first frame is determined by the options only
         first = Boolean(opts.first);
       }
+      frameCount++;
 
       width = Math.max(0, Math.floor(width));
       height = Math.max(0, Math.floor(height));
@@ -94,6 +130,15 @@ function GIFEncoder(opt = {}) {
         encodeColorTable(stream, palette);
         if (repeat >= 0) {
           encodeNetscapeExt(stream, repeat);
+        }
+      }
+
+      // Optional per-frame comment extension(s), written just before
+      // this frame's graphic control extension
+      if (comment != null) {
+        const comments = Array.isArray(comment) ? comment : [comment];
+        for (const c of comments) {
+          encodeCommentExt(stream, c);
         }
       }
 
@@ -211,6 +256,55 @@ function encodeNetscapeExt(stream, repeat) {
   stream.writeByte(0); // block terminator
 }
 
+function encodeCommentExt(stream, comment) {
+  stream.writeByte(0x21); // extension introducer
+  stream.writeByte(0xfe); // comment label
+  writeSubBlocks(stream, toByteArray(comment));
+}
+
+function encodeApplicationExt(stream, appIdentifier, authCode, data) {
+  stream.writeByte(0x21); // extension introducer
+  stream.writeByte(0xff); // app extension label
+  stream.writeByte(11); // block size
+  stream.writeBytesView(fixedLengthBytes(appIdentifier, 8)); // app id
+  stream.writeBytesView(fixedLengthBytes(authCode, 3)); // app auth code
+  writeSubBlocks(stream, toByteArray(data));
+}
+
+function encodeExtension(stream, label, data) {
+  stream.writeByte(0x21); // extension introducer
+  stream.writeByte(label & 0xff); // extension label
+  writeSubBlocks(stream, toByteArray(data));
+}
+
+// Writes data as a series of GIF data sub-blocks (each up to 255 bytes,
+// prefixed by its size), followed by a zero-size block terminator.
+function writeSubBlocks(stream, data) {
+  for (let i = 0; i < data.length; i += 255) {
+    const chunkSize = Math.min(255, data.length - i);
+    stream.writeByte(chunkSize);
+    stream.writeBytesView(data, i, chunkSize);
+  }
+  stream.writeByte(0); // block terminator
+}
+
+function toByteArray(data) {
+  if (data == null) return new Uint8Array(0);
+  if (typeof data === "string") return new TextEncoder().encode(data);
+  if (data instanceof Uint8Array) return data;
+  return Uint8Array.from(data);
+}
+
+// Coerces data to exactly `length` bytes, truncating or padding
+// with spaces (0x20) as needed (per GIF app identifier convention).
+function fixedLengthBytes(data, length) {
+  const bytes = toByteArray(data);
+  const out = new Uint8Array(length);
+  out.fill(0x20);
+  out.set(bytes.subarray(0, Math.min(bytes.length, length)));
+  return out;
+}
+
 function encodeColorTable(stream, palette) {
   const colorTableLength = 1 << colorTableSize(palette.length);
   for (let i = 0; i < colorTableLength; i++) {
@@ -289,6 +383,7 @@ export {
   nearestColor,
   nearestColorIndexWithDistance,
   snapColorsToPalette,
+  parseExtensions,
 };
 
 export default GIFEncoder;
