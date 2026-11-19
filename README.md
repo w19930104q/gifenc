@@ -59,6 +59,32 @@ gif.finish();
 const output = gif.bytes();
 ```
 
+## Per-Frame (Adaptive) Palettes
+
+When a whole animation is forced into a single shared 256-color palette, frames with rich or distinct colors can show visible banding. To avoid this, give each frame its own adaptive palette: quantize each frame individually and pass its `palette` to `writeFrame`. The first frame's palette is stored as the Global Color Table, and each subsequent frame's palette is stored as a Local Color Table that applies to that frame only — frames do not need to share any colors.
+
+```js
+import { GIFEncoder, quantize, applyPalette } from 'https://unpkg.com/gifenc';
+
+const gif = GIFEncoder();
+
+for (const { data, width, height } of frames) {
+  // Quantize this frame on its own, adapting the 256 colors to its content
+  const palette = quantize(data, 256);
+
+  // Map this frame's pixels to its own palette
+  const index = applyPalette(data, palette);
+
+  // Passing `palette` on every frame stores it as a local color table
+  gif.writeFrame(index, width, height, { palette, delay: 100 });
+}
+
+gif.finish();
+const output = gif.bytes();
+```
+
+If you instead pass `palette` only on the first frame (or pass the same palette for every frame), all frames share the single Global Color Table — see [./test/adaptive_palette_node.js](./test/adaptive_palette_node.js) for a runnable comparison of both approaches.
+
 ## API
 
 > :bulb: If you are new to GIF encoding, you might want to read [How GIF Encoding Works](#how-gif-encoding-works) to better understand the steps involved.
@@ -112,7 +138,7 @@ Once created:
 
 Writes a single frame into the GIF stream, with `index` (indexed Uint8Array bitmap image), a size, and optional per-frame options:
 
-- `palette` (color table array) — the color table for this frame, which is required for the first frame (i.e. global color table) but optional for subsequent frames. If not specified, the frame will use the first (global) color table in the stream.
+- `palette` (color table array) — the color table for this frame, which is required for the first frame (i.e. global color table) but optional for subsequent frames. When specified on a subsequent frame, it is stored as a Local Color Table that applies to that frame only; if not specified, the frame will use the first (global) color table in the stream. See [Per-Frame (Adaptive) Palettes](#per-frame-adaptive-palettes).
 - `first` (boolean, default false) — in non-auto mode, set this to true when encoding the first frame in an image or sequence, and it will encode the Logical Screen Descriptor and a Global Color Table. This option is ignored in `auto` mode.
 - `transparent` (boolean, default false) — enable 1-bit transparency for this frame
 - `transparentIndex` (number, default 0) — if `transparency` is enabled, the color at the specified palette index will be treated as fully transparent for this frame
