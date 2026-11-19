@@ -26,10 +26,20 @@ function GIFEncoder(opt = {}) {
 
   let hasInit = false;
 
+  // State of the previously written frame, tracked so the encoder stays
+  // aligned with the decoder's canvas semantics: a frame's disposal method
+  // determines whether its pixels remain on the decoder canvas when the
+  // next frame is composited. If a frame is left on the canvas and the
+  // next frame uses 1-bit transparency, the stale pixels show through the
+  // transparent regions ("ghosting"), so this state is used to ensure the
+  // canvas is cleared before transparent frames are drawn.
+  let prevFrame = null;
+
   return {
     reset() {
       stream.reset();
       hasInit = false;
+      prevFrame = null;
     },
     finish() {
       stream.writeByte(constants.trailer);
@@ -97,14 +107,46 @@ function GIFEncoder(opt = {}) {
         }
       }
 
+      // A new logical screen starts a fresh decoder canvas
+      if (first) prevFrame = null;
+
+      // If this frame uses 1-bit transparency, its transparent pixels
+      // reveal whatever the decoder canvas currently holds. When the
+      // previous frame was left lingering on the canvas by a default
+      // "keep" disposal (0/1), retroactively upgrade its disposal to
+      // "restore to background" (2) so the decoder clears it before this
+      // frame is drawn. Disposal methods explicitly requested by the
+      // user (e.g. accumulation with dispose 1) are always respected,
+      // as are frames that manage the canvas themselves (dispose 0/1/3).
+      const effectiveTransparent = transparent && transparentIndex >= 0;
+      const expectsCleanCanvas =
+        effectiveTransparent && (dispose < 0 || dispose === 2);
+      if (
+        expectsCleanCanvas &&
+        prevFrame &&
+        !prevFrame.userDisposal &&
+        prevFrame.disposal <= 1
+      ) {
+        patchFrameDisposal(stream, prevFrame, 2);
+      }
+
       const delayTime = Math.round(delay / 10);
-      encodeGraphicControlExt(
+      // Remember where this frame's GCE starts so its disposal method can
+      // still be rewritten when the next frame is encoded
+      const gceOffset = stream.bytesView().length;
+      const writtenDisposal = encodeGraphicControlExt(
         stream,
         dispose,
         delayTime,
         transparent,
         transparentIndex,
       );
+      prevFrame = {
+        // byte offset of the GCE packed fields (holds the disposal bits)
+        packedByteOffset: gceOffset + 3,
+        disposal: writtenDisposal,
+        userDisposal: dispose >= 0,
+      };
 
       const useLocalColorTable = Boolean(palette) && !first;
       encodeImageDescriptor(
@@ -176,6 +218,18 @@ function encodeGraphicControlExt(
   writeUInt16(stream, delay); // delay x 1/100 sec
   stream.writeByte(transparentIndex || 0x00); // transparent color index
   stream.writeByte(0); // block terminator
+
+  // report the disposal method that was actually written
+  return disp >> 2;
+}
+
+// Rewrites the disposal method (bits 2-4 of the GCE packed fields byte) of
+// a previously encoded frame, leaving all other GCE fields untouched.
+function patchFrameDisposal(stream, frame, disposal) {
+  const view = stream.bytesView();
+  view[frame.packedByteOffset] =
+    (view[frame.packedByteOffset] & 0b11100011) | ((disposal & 0x07) << 2);
+  frame.disposal = disposal;
 }
 
 function encodeLogicalScreenDescriptor(

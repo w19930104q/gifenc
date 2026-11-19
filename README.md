@@ -120,6 +120,8 @@ Writes a single frame into the GIF stream, with `index` (indexed Uint8Array bitm
 - `repeat` (number, default 0) — repeat count, set to `-1` for 'once', `0` for 'forever', and any other positive integer for the number of repetitions
 - `dispose` (number, default -1) — advanced GIF dispose flag override, -1 is 'use default'
 
+When a frame uses transparency, its transparent pixels reveal whatever is currently on the decoder's canvas. To avoid "ghosting" (stale pixels of earlier frames showing through), the encoder ensures the canvas is cleared before such a frame is drawn: if the previous frame was left on the canvas by a default (non-override) disposal method, its disposal is upgraded to "restore to background" (2). Frames with an explicitly specified `dispose` value are always left untouched, so accumulation effects (e.g. `dispose: 1`) remain possible.
+
 #### `gif.finish()`
 
 Writes the GIF end-of-stream character, required after writing all frames for the image to encode correctly.
