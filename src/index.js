@@ -51,9 +51,9 @@ function GIFEncoder(opt = {}) {
       const {
         transparent = false,
         transparentIndex = 0x00,
-        delay = 0,
+        delay = 0, // frame delay in milliseconds
         palette = null,
-        repeat = 0, // -1=once, 0=forever, >0=count
+        repeat = 0, // total plays: -1 or 1 = once, 0 = forever, N > 1 = repeat N times
         colorDepth = 8,
         dispose = -1,
       } = opts;
@@ -92,12 +92,22 @@ function GIFEncoder(opt = {}) {
           colorDepth,
         );
         encodeColorTable(stream, palette);
-        if (repeat >= 0) {
-          encodeNetscapeExt(stream, repeat);
+        // The NETSCAPE2.0 loop field counts *extra* iterations beyond the
+        // first play (0 = loop forever), while the public `repeat` option is
+        // expressed in total plays (-1/1 = once, 0 = forever, N > 1 = N
+        // plays). Only emit the extension when there is something to encode;
+        // a play-once animation simply omits the block.
+        const loopCount = toNetscapeLoopCount(repeat);
+        if (loopCount >= 0) {
+          encodeNetscapeExt(stream, loopCount);
         }
       }
 
-      const delayTime = Math.round(delay / 10);
+      // GIF frame delays are unsigned 16-bit values in hundredths of a second,
+      // so convert the millisecond input and clamp it to the legal range.
+      // Clamping (instead of letting writeUInt16 truncate) keeps playback
+      // timing identical across players for any delay sequence.
+      const delayTime = toGifDelay(delay);
       encodeGraphicControlExt(
         stream,
         dispose,
@@ -200,14 +210,14 @@ function encodeLogicalScreenDescriptor(
   stream.writeBytes([fields, backgroundColorIndex, pixelAspectRatio]);
 }
 
-function encodeNetscapeExt(stream, repeat) {
+function encodeNetscapeExt(stream, loopCount) {
   stream.writeByte(0x21); // extension introducer
   stream.writeByte(0xff); // app extension label
   stream.writeByte(11); // block size
   writeUTFBytes(stream, "NETSCAPE2.0"); // app id + auth code
   stream.writeByte(3); // sub-block size
   stream.writeByte(1); // loop sub-block id
-  writeUInt16(stream, repeat); // loop count (extra iterations, 0=repeat forever)
+  writeUInt16(stream, loopCount); // extra iterations beyond the first play, 0=repeat forever
   stream.writeByte(0); // block terminator
 }
 
@@ -264,6 +274,30 @@ function encodePixels(
 }
 
 // Utilities
+
+// The GIF Graphic Control Extension stores frame delays as an unsigned
+// 16-bit integer measured in hundredths of a second. The public API takes
+// milliseconds, so convert units and clamp to [0, 65535]. Without the
+// clamp, oversized or negative delays overflow/wrap when written as a
+// u16 and different players interpret them differently.
+function toGifDelay(delay) {
+  const centiseconds = Math.round(Number(delay) / 10);
+  if (centiseconds === Infinity) return 0xffff; // infinite wait -> longest representable delay
+  if (!Number.isFinite(centiseconds) || centiseconds < 0) return 0; // NaN / negative -> no delay
+  if (centiseconds > 0xffff) return 0xffff; // oversized -> clamp instead of u16 wrapping
+  return centiseconds;
+}
+
+// Maps the public `repeat` option (total number of plays) onto the
+// NETSCAPE2.0 loop field, which counts *extra* iterations after the first
+// play where 0 means "loop forever". Returns -1 when no extension should
+// be written at all (i.e. the animation plays exactly once).
+function toNetscapeLoopCount(repeat) {
+  if (repeat === 0) return 0; // keep default: loop forever
+  if (!Number.isFinite(repeat) || repeat < 2) return -1; // play once / no block
+  // Total plays N means N - 1 extra iterations; clamp to the u16 maximum.
+  return Math.min(Math.floor(repeat) - 1, 0xffff);
+}
 
 function writeUInt16(stream, short) {
   stream.writeByte(short & 0xff);

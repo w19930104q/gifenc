@@ -116,8 +116,8 @@ Writes a single frame into the GIF stream, with `index` (indexed Uint8Array bitm
 - `first` (boolean, default false) — in non-auto mode, set this to true when encoding the first frame in an image or sequence, and it will encode the Logical Screen Descriptor and a Global Color Table. This option is ignored in `auto` mode.
 - `transparent` (boolean, default false) — enable 1-bit transparency for this frame
 - `transparentIndex` (number, default 0) — if `transparency` is enabled, the color at the specified palette index will be treated as fully transparent for this frame
-- `delay` (number, default 0) — the frame delay in milliseconds
-- `repeat` (number, default 0) — repeat count, set to `-1` for 'once', `0` for 'forever', and any other positive integer for the number of repetitions
+- `delay` (number, default 0) — the frame delay in milliseconds. It is converted to the GIF's unsigned 16-bit hundredths-of-a-second (centisecond) time base and clamped to the legal range (0–6553500 ms), so any delay sequence is encoded deterministically and plays back at the same speed in every standards-compliant player
+- `repeat` (number, default 0) — total number of plays, set to `-1` (or `1`) to play the animation exactly once, `0` to loop forever, or any integer `N > 1` to play it `N` times in total. This is mapped onto the NETSCAPE2.0 extension field, which counts *extra* iterations beyond the first play (and is omitted entirely for play-once animations), so loop termination matches the requested count
 - `dispose` (number, default -1) — advanced GIF dispose flag override, -1 is 'use default'
 
 #### `gif.finish()`

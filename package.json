@@ -18,6 +18,7 @@
   },
   "scripts": {
     "prepublishOnly": "npm run dist:cjs",
+    "test": "node --test test/semantics_test.js",
     "serve": "serve .",
     "dist:cjs": "esbuild ./src/index.js --bundle --format=cjs --outfile=dist/gifenc.js --sourcemap --target=chrome58,firefox57,safari11,edge16,node12"
   },
