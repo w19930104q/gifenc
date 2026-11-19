@@ -9,6 +9,15 @@ export default function createStream(initialCapacity = 256) {
     reset() {
       cursor = 0;
     },
+    // Returns a copy of the bytes written so far and rewinds the stream.
+    // Useful for chunked/streaming encoding: periodically draining the stream
+    // bounds the amount of memory that stays resident while still allowing an
+    // arbitrarily long animation to be encoded.
+    drain() {
+      const out = contents.slice(0, cursor);
+      cursor = 0;
+      return out;
+    },
     bytesView() {
       return contents.subarray(0, cursor);
     },

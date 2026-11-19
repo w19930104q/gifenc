@@ -19,6 +19,7 @@
   "scripts": {
     "prepublishOnly": "npm run dist:cjs",
     "serve": "serve .",
+    "test": "node test/chunked_test.js",
     "dist:cjs": "esbuild ./src/index.js --bundle --format=cjs --outfile=dist/gifenc.js --sourcemap --target=chrome58,firefox57,safari11,edge16,node12"
   },
   "ava": {

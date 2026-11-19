@@ -120,6 +120,82 @@ Writes a single frame into the GIF stream, with `index` (indexed Uint8Array bitm
 - `repeat` (number, default 0) — repeat count, set to `-1` for 'once', `0` for 'forever', and any other positive integer for the number of repetitions
 - `dispose` (number, default -1) — advanced GIF dispose flag override, -1 is 'use default'
 
+### Chunked (tile) encoding and bounded memory
+
+When encoding large or long animations, `writeFrame()` expects the entire indexed frame to reside in memory, and the encoder's internal output buffer retains every frame until `bytes()` is called — so resident memory grows linearly with frame size and animation length.
+
+The encoder additionally exposes a **chunked frame API**. A frame is opened, its indexed pixels are fed in one or more contiguous row-major chunks, and the frame is then closed. Because chunks are just spans of the same pixel stream `writeFrame()` consumes, the encoded GIF is **byte-identical** no matter how the pixels are split — any positive chunk size works, including `1` and sizes that do not evenly divide the frame. The frame is still a single GIF image descriptor (one LZW stream); tiling never introduces extra images.
+
+```js
+const gif = GIFEncoder();
+
+// Low-level lifecycle
+gif.writeFrameStart(width, height, { palette });
+for (let offset = 0; offset < width * height; offset += blockSize) {
+  gif.writeFrameChunk(index, offset, Math.min(blockSize, width * height - offset));
+}
+gif.writeFrameEnd();
+
+gif.finish();
+```
+
+#### `gif.writeFrameTiles(indexOrFn, width, height, opts = {})`
+
+Convenience wrapper around the lifecycle above. `opts` accepts everything `writeFrame()` accepts plus:
+
+- `blockSize` (number, default `65536`) — maximum number of indexed pixels fed per chunk; any positive integer is valid
+
+Two call styles are supported, both producing output identical to `writeFrame()`:
+
+```js
+// Pull style: pass the full indexed array; the encoder only references one
+// span at a time
+gif.writeFrameTiles(index, width, height, { palette, blockSize: 4096 });
+
+// Push style: pass a callback that returns the next chunk (or null at the
+// end). The full indexed frame never needs to exist at once — generate each
+// band/block on demand.
+gif.writeFrameTiles(
+  (offset, limit) => generateIndexedChunk(offset, limit),
+  width,
+  height,
+  { palette, blockSize: 4096 },
+);
+```
+
+#### Bounding peak memory: the `{ output }` sink and `gif.drain()`
+
+To keep resident memory flat regardless of animation length, hand the encoded bytes off as they are produced instead of accumulating them:
+
+```js
+const chunks = [];
+const gif = GIFEncoder({
+  // Called with each completed segment; the internal buffer is released
+  // immediately, so it never grows with the number of frames.
+  output: (chunk) => chunks.push(chunk),
+});
+
+for (const frame of frames) {
+  gif.writeFrameTiles(
+    (offset, limit) => frame.generateChunk(offset, limit),
+    width,
+    height,
+    { palette: frame.palette, delay: frame.delay, blockSize: 4096 },
+  );
+}
+gif.finish();
+
+// Concatenating all sink chunks reconstructs the exact same GIF bytes that
+// bytes() would have returned.
+const gifBytes = concat(chunks);
+```
+
+Alternatively, without a sink, call `gif.drain()` at any frame boundary to take a copy of the bytes so far and rewind the internal buffer. With a sink (or periodic draining) the encoder's resident buffer is bounded by one segment — frame headers plus the compressed output of at most one block — independent of frame count and image dimensions.
+
+#### `gif.writeFrameStart(width, height, opts)` / `gif.writeFrameChunk(index, offset?, length?)` / `gif.writeFrameEnd()`
+
+The primitives `writeFrameTiles()` is built on, for full control over chunk boundaries (e.g. encoding bands as a rasterizer produces them). A frame opened with `writeFrameStart()` must receive exactly `width * height` pixels across its chunks before `writeFrameEnd()` is called; starting another frame or finishing the GIF mid-frame throws.
+
 #### `gif.finish()`
 
 Writes the GIF end-of-stream character, required after writing all frames for the image to encode correctly.
@@ -205,6 +281,12 @@ To run the node test:
 
 ```sh
 node test/encode_node.js
+```
+
+The chunked-encoding test suite (output equivalence, bounded-memory and lifecycle checks, zero dependencies):
+
+```sh
+npm test
 ```
 
 And check `test/output/` folder for the result. Or to benchmark with node:
