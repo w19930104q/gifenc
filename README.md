@@ -119,6 +119,10 @@ Writes a single frame into the GIF stream, with `index` (indexed Uint8Array bitm
 - `delay` (number, default 0) — the frame delay in milliseconds
 - `repeat` (number, default 0) — repeat count, set to `-1` for 'once', `0` for 'forever', and any other positive integer for the number of repetitions
 - `dispose` (number, default -1) — advanced GIF dispose flag override, -1 is 'use default'
+- `previous` (Uint8Array, optional) — the indexed bitmap of the previous frame (same dimensions). When passed, the frame is diffed against it and only the bounding box of the changed pixels is encoded, as a positioned sub-image that decoders composite onto the previous frame. See [Dirty-Region (Incremental) Frames](#dirty-region-incremental-frames)
+- `rect` ({ x, y, width, height }, optional) — an explicit dirty rectangle, if you already know which region changed and want to skip the diff. Takes precedence over `previous`; clipped to the frame bounds
+
+See [Dirty-Region (Incremental) Frames](#dirty-region-incremental-frames) for details on `previous` and `rect`.
 
 #### `gif.finish()`
 
@@ -162,6 +166,32 @@ For the given `pixel` as `[r,g,b]` or `[r,g,b,a]` (depending on your pixel forma
 ### `[index, distance] = nearestColorIndexWithDistance(palette, pixel)`
 
 Same as above, but returns a tuple of `index` and `distance` (euclidean distance squared).
+
+## Dirty-Region (Incremental) Frames
+
+GIF image descriptors carry their own position and size, so a frame that only changed in a small area doesn't need to re-encode the whole image. Pass `previous` (the previous frame's indexed pixels) or an explicit `rect` to `writeFrame`, and only the changed region will be encoded:
+
+```js
+const gif = GIFEncoder();
+gif.writeFrame(frame0, width, height, { palette, delay: 100 });
+// diff against the previous frame, encoding only what changed
+gif.writeFrame(frame1, width, height, { delay: 100, previous: frame0 });
+// ...or specify the dirty region yourself
+gif.writeFrame(frame2, width, height, {
+  delay: 100,
+  rect: { x: 10, y: 8, width: 12, height: 12 },
+});
+gif.finish();
+```
+
+Details:
+
+- Decoders composite each sub-frame onto the previous frame, so the decoded result is pixel-identical to encoding full frames — any dirty shape works, since the bounding box of the changed pixels is encoded
+- The first frame is always encoded in full (it defines the logical screen)
+- If nothing changed, a minimal 1x1 no-op frame is emitted
+- If the dirty region spans the whole frame, the output is byte-identical to the regular full-frame path
+- Sub-frames default to the "do not dispose" disposal method so subsequent frames composite correctly; avoid combining incremental frames with `dispose: 2`/`dispose: 3` or `transparent` on preceding frames
+- For manual control, you can compute the region yourself with `rect = findDirtyRect(previous, current, width, height)` (exported from the module), which returns `{ x, y, width, height }`, a zero-size rect when nothing changed, or `null` if the buffers can't be diffed
 
 ## Web Workers
 

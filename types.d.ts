@@ -13,6 +13,13 @@ type GIFEncoderOpts = {
   initialCapacity?: number;
 };
 
+type DirtyRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 type WriteFrameOpts = {
   palette?: number[][];
   first?: boolean;
@@ -21,6 +28,8 @@ type WriteFrameOpts = {
   delay?: number;
   repeat?: number;
   dispose?: number;
+  previous?: Uint8Array;
+  rect?: DirtyRect;
 };
 
 type Encoder = {
@@ -62,3 +71,10 @@ export declare function nearestColorIndexWithDistance(
   palette: number[][],
   pixel: [number, number, number] | [number, number, number],
 ): [number, number];
+
+export declare function findDirtyRect(
+  previous: Uint8Array,
+  current: Uint8Array,
+  width: number,
+  height: number,
+): DirtyRect | null;

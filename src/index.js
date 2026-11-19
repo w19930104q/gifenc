@@ -2,6 +2,7 @@ import constants from "./constants.js";
 import lzwEncode from "./lzwEncode.js";
 import createStream from "./stream.js";
 import quantize from "./pnnquant2.js";
+import { findDirtyRect, clipDirtyRect, copyDirtyRegion } from "./dirty.js";
 
 import {
   prequantize,
@@ -56,6 +57,8 @@ function GIFEncoder(opt = {}) {
         repeat = 0, // -1=once, 0=forever, >0=count
         colorDepth = 8,
         dispose = -1,
+        previous = null,
+        rect = null,
       } = opts;
 
       let first = false;
@@ -98,9 +101,58 @@ function GIFEncoder(opt = {}) {
       }
 
       const delayTime = Math.round(delay / 10);
+
+      // Dirty-region (incremental) encoding: if a dirty rect is given
+      // explicitly, or can be derived by diffing against the indexed
+      // pixels of the previous frame, we only encode the changed region
+      // as a positioned sub-image. Decoders composite it onto the
+      // previous frame, producing the same result as a full frame.
+      // The first frame is always encoded in full, since it defines the
+      // logical screen and there is nothing to composite onto yet.
+      let dirty = null;
+      if (!first) {
+        if (rect) {
+          dirty = clipDirtyRect(rect, width, height);
+        } else if (previous) {
+          dirty = findDirtyRect(previous, index, width, height);
+        }
+      }
+
+      let frameX = 0;
+      let frameY = 0;
+      let frameWidth = width;
+      let frameHeight = height;
+      let pixels = index;
+      let frameDispose = dispose;
+      if (dirty) {
+        if (dirty.width <= 0 || dirty.height <= 0) {
+          // Nothing changed: emit a 1x1 no-op frame. The single pixel
+          // holds the current (unchanged) value, so compositing is a
+          // no-op and the decoded result still matches a full frame.
+          dirty = { x: 0, y: 0, width: 1, height: 1 };
+        }
+        const isFullFrame =
+          dirty.x === 0 &&
+          dirty.y === 0 &&
+          dirty.width === width &&
+          dirty.height === height;
+        if (!isFullFrame) {
+          frameX = dirty.x;
+          frameY = dirty.y;
+          frameWidth = dirty.width;
+          frameHeight = dirty.height;
+          pixels = copyDirtyRegion(index, width, dirty);
+          if (frameDispose < 0) {
+            // Default to "do not dispose" so that subsequent frames
+            // composite onto this one.
+            frameDispose = 1;
+          }
+        }
+      }
+
       encodeGraphicControlExt(
         stream,
-        dispose,
+        frameDispose,
         delayTime,
         transparent,
         transparentIndex,
@@ -109,16 +161,18 @@ function GIFEncoder(opt = {}) {
       const useLocalColorTable = Boolean(palette) && !first;
       encodeImageDescriptor(
         stream,
-        width,
-        height,
+        frameX,
+        frameY,
+        frameWidth,
+        frameHeight,
         useLocalColorTable ? palette : null,
       );
       if (useLocalColorTable) encodeColorTable(stream, palette);
       encodePixels(
         stream,
-        index,
-        width,
-        height,
+        pixels,
+        frameWidth,
+        frameHeight,
         colorDepth,
         accum,
         htab,
@@ -224,11 +278,11 @@ function encodeColorTable(stream, palette) {
   }
 }
 
-function encodeImageDescriptor(stream, width, height, localPalette) {
+function encodeImageDescriptor(stream, left, top, width, height, localPalette) {
   stream.writeByte(0x2c); // image separator
 
-  writeUInt16(stream, 0); // x position
-  writeUInt16(stream, 0); // y position
+  writeUInt16(stream, left); // x position
+  writeUInt16(stream, top); // y position
   writeUInt16(stream, width); // image size
   writeUInt16(stream, height);
 
@@ -289,6 +343,7 @@ export {
   nearestColor,
   nearestColorIndexWithDistance,
   snapColorsToPalette,
+  findDirtyRect,
 };
 
 export default GIFEncoder;
